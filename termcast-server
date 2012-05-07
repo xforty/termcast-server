@@ -1,0 +1,189 @@
+#! /bin/bash
+### BEGIN INIT INFO
+# Provides:          termcast-server
+# Required-Start:    $remote_fs $syslog
+# Required-Stop:     $remote_fs $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Example initscript
+# Description:       This file should be used to construct scripts to be
+#                    placed in /etc/init.d.
+### END INIT INFO
+
+# Author: Matt Edlefsen <matt.edlefsen@gmail.com>
+#
+# Please remove the "Author" lines above and replace them
+# with your own name if you copy and modify this script.
+
+# Do NOT "set -e"
+
+# PATH should only include /usr/* if it runs after the mountnfs.sh script
+NAME="termcast-server"
+PATH=/sbin:/usr/sbin:/bin:/usr/bin:/usr/local/bin
+DESC="Termcast Server"
+
+# Load the VERBOSE setting and other rcS variables
+. /lib/init/vars.sh
+
+# Define LSB log_* functions.
+# Depend on lsb-base (>= 3.0-6) to ensure that this file is present.
+. /lib/lsb/init-functions
+
+find_pids()
+{
+  TC_PID="$(ps axo user,pid,cmd | awk '$4 == "/usr/local/bin/termcast-server" && $1 == "termcast" { print $2 }')"
+  TCW_PID="$(ps axo comm,user,pid,cmd | awk '$1 == "twiggy" && $2 == "termcast" { print $3 } $4 == "app.psgi" && $2 == "root" { print $3 }')"
+}
+
+kill_pids()
+{
+  if [[ -n "$TC_PID" && -e "/proc/$TC_PID/exe" ]]
+  then
+    kill "$TC_PID"
+  fi
+
+  if [[ -n "$TCW_PID" && -e "/proc/$TCW_PID/exe" ]]
+  then
+    kill "$TCW_PID"
+  fi
+}
+
+check_pids()
+{
+  find_pids
+  local level="$1"
+
+  if [ -z "$level" ]
+  then
+    level="all"
+  fi
+
+  if [[ "$level" == "all" && -n "$TC_PID" && -n "$TCW_PID" ]]
+  then
+    return 0
+  fi
+
+  if [[ "$level" == "any" && ( -n "$TC_PID" || -n "$TCW_PID" ) ]]
+  then
+    return 0
+  fi
+
+  if [[ "$level" == "none" && -z "$TC_PID" && -z "$TCW_PID" ]]
+  then
+    return 0
+  fi
+
+  return 1
+}
+
+#
+# Function that starts the daemon/service
+#
+do_start()
+{
+	# Return
+	#   0 if daemon has been started
+	#   1 if daemon was already running
+	#   2 if daemon could not be started
+        if check_pids any
+        then
+          return 1
+        fi
+
+        cd '/var/termcast'
+        nohup termcast-server &> termcast-server.log &
+        while [ -z "$(fuser /var/termcast/connections.sock 2>/dev/null)" ]
+        do
+          sleep 1
+        done
+        sleep 2
+        nohup twiggy &> web.log &
+        sleep 1
+
+        if ! check_pids all
+        then
+          return 2
+        fi
+}
+
+#
+# Function that stops the daemon/service
+#
+do_stop()
+{
+	# Return
+	#   0 if daemon has been stopped
+	#   1 if daemon was already stopped
+	#   2 if daemon could not be stopped
+	#   other if a failure occurred
+        if check_pids none
+        then
+          return 1
+        fi
+        kill_pids
+        sleep 1
+
+        if ! check_pids none
+        then
+          return 2
+        fi
+        return 0
+}
+
+case "$1" in
+  start)
+	[ "$VERBOSE" != no ] && log_daemon_msg "Starting $DESC" "$NAME"
+	do_start
+	case "$?" in
+		0|1) [ "$VERBOSE" != no ] && log_end_msg 0 ;;
+		2) [ "$VERBOSE" != no ] && log_end_msg 1 ;;
+	esac
+	;;
+  stop)
+	[ "$VERBOSE" != no ] && log_daemon_msg "Stopping $DESC" "$NAME"
+	do_stop
+	case "$?" in
+		0|1) [ "$VERBOSE" != no ] && log_end_msg 0 ;;
+		2) [ "$VERBOSE" != no ] && log_end_msg 1 ;;
+	esac
+	;;
+  status)
+       if check_pids all
+       then
+         echo "Running"
+         exit 0
+       else
+         echo "Not Running"
+         exit 1
+       fi
+       ;;
+  restart|force-reload)
+	#
+	# If the "reload" option is implemented then remove the
+	# 'force-reload' alias
+	#
+	log_daemon_msg "Restarting $DESC" "$NAME"
+	do_stop
+	case "$?" in
+	  0|1)
+		do_start
+		case "$?" in
+			0) log_end_msg 0 ;;
+			1) log_end_msg 1 ;; # Old process is still running
+			*) log_end_msg 1 ;; # Failed to start
+		esac
+		;;
+	  *)
+	  	# Failed to stop
+		log_end_msg 1
+		;;
+	esac
+	;;
+  *)
+	#echo "Usage: $SCRIPTNAME {start|stop|restart|reload|force-reload}" >&2
+	echo "Usage: /etc/init.d/termcast-server {start|stop|status|restart|force-reload}" >&2
+	exit 3
+	;;
+esac
+
+:
